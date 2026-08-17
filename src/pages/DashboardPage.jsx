@@ -4,6 +4,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import Logo from '../components/Logo';
 import ProductCard from '../components/ProductCard';
 import AddProductModal from '../components/AddProductModal';
+import EditProductModal from '../components/EditProductModal';
 import { apiRequest } from '../utils/api';
 import {
   LogOut,
@@ -15,7 +16,9 @@ import {
   CheckCircle2,
   Filter,
   Loader2,
-  RefreshCw
+  RefreshCw,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 
 const DashboardPage = () => {
@@ -25,24 +28,43 @@ const DashboardPage = () => {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState(null);
 
-  // Filters & Search
+  // Pagination State (Use-Case 1: Capped at 20 items per page)
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+
+  // Search & Filter Controls (Use-Case 4)
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedExpiryWindow, setSelectedExpiryWindow] = useState('ALL');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
-  const [selectedStatus, setSelectedStatus] = useState('ALL');
 
   const handleLogout = () => {
     logout();
     navigate('/login');
   };
 
-  const fetchProducts = async () => {
+  const fetchProducts = async (currentPage = page) => {
     setLoading(true);
     setError('');
     try {
-      const data = await apiRequest('/products');
+      let query = `?page=${currentPage}&limit=20`;
+      if (searchQuery.trim()) {
+        query += `&search=${encodeURIComponent(searchQuery.trim())}`;
+      }
+      if (selectedExpiryWindow !== 'ALL') {
+        query += `&expiryWindow=${selectedExpiryWindow}`;
+      }
+
+      const data = await apiRequest(`/products${query}`);
       setProducts(data.products || []);
+      if (data.pagination) {
+        setTotalPages(data.pagination.totalPages || 1);
+        setTotalCount(data.pagination.totalCount || 0);
+        setPage(data.pagination.page || 1);
+      }
     } catch (err) {
       setError(err.message || 'Failed to load products');
     } finally {
@@ -52,25 +74,36 @@ const DashboardPage = () => {
 
   useEffect(() => {
     if (user) {
-      fetchProducts();
+      fetchProducts(1);
     }
-  }, [user]);
+  }, [user, searchQuery, selectedExpiryWindow]);
 
   const handleAddProduct = async (productData) => {
-    const data = await apiRequest('/products', {
+    await apiRequest('/products', {
       method: 'POST',
       body: JSON.stringify(productData)
     });
-    // Add new product to local state
-    setProducts((prev) => [data.product, ...prev]);
+    // Refresh product list
+    fetchProducts(1);
+  };
+
+  const handleUpdateProduct = async (productId, updatedData) => {
+    const data = await apiRequest(`/products/${productId}`, {
+      method: 'PUT',
+      body: JSON.stringify(updatedData)
+    });
+    // Update local state
+    setProducts((prev) =>
+      prev.map((p) => (p._id === productId ? (data.product || { ...p, ...updatedData }) : p))
+    );
   };
 
   const handleDeleteProduct = async (productId) => {
     await apiRequest(`/products/${productId}`, {
       method: 'DELETE'
     });
-    // Remove product from local state
     setProducts((prev) => prev.filter((p) => p._id !== productId));
+    setTotalCount((prev) => Math.max(0, prev - 1));
   };
 
   if (!user) {
@@ -97,7 +130,6 @@ const DashboardPage = () => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  let totalItems = products.length;
   let expiredCount = 0;
   let expiringSoonCount = 0;
   let freshCount = 0;
@@ -116,28 +148,10 @@ const DashboardPage = () => {
     }
   });
 
-  // Filter Products
+  // Client-side category filtering
   const filteredProducts = products.filter((p) => {
-    // Search query filter
-    const matchesSearch =
-      p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (p.barcode && p.barcode.includes(searchQuery)) ||
-      (p.category && p.category.toLowerCase().includes(searchQuery.toLowerCase()));
-
-    // Category filter
-    const matchesCategory = selectedCategory === 'ALL' || p.category === selectedCategory;
-
-    // Status filter
-    const exp = new Date(p.expiryDate);
-    exp.setHours(0, 0, 0, 0);
-    const diffDays = Math.ceil((exp.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-
-    let matchesStatus = true;
-    if (selectedStatus === 'EXPIRED') matchesStatus = diffDays < 0;
-    if (selectedStatus === 'EXPIRING_SOON') matchesStatus = diffDays >= 0 && diffDays <= 7;
-    if (selectedStatus === 'FRESH') matchesStatus = diffDays > 7;
-
-    return matchesSearch && matchesCategory && matchesStatus;
+    if (selectedCategory === 'ALL') return true;
+    return p.category === selectedCategory;
   });
 
   const categoriesList = Array.from(new Set(products.map((p) => p.category).filter(Boolean)));
@@ -183,13 +197,13 @@ const DashboardPage = () => {
           </div>
 
           <div className="relative z-10 shrink-0">
-            <button
-              onClick={() => setIsModalOpen(true)}
+            <Link
+              to="/add-product"
               className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 bg-white text-[#0984e3] hover:bg-blue-50 font-bold rounded-2xl shadow-lg shadow-black/10 transition-all hover:scale-105"
             >
               <Plus className="w-5 h-5" />
               <span>Add New Product</span>
-            </button>
+            </Link>
           </div>
         </div>
 
@@ -201,7 +215,7 @@ const DashboardPage = () => {
             </div>
             <div>
               <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider block">Total Items</span>
-              <span className="text-2xl font-black text-gray-900">{totalItems}</span>
+              <span className="text-2xl font-black text-gray-900">{totalCount || products.length}</span>
             </div>
           </div>
 
@@ -236,34 +250,40 @@ const DashboardPage = () => {
           </div>
         </div>
 
-        {/* Filters & Search Controls */}
+        {/* Filters & Search Controls (Use-Case 4) */}
         <div className="bg-white p-4 sm:p-5 rounded-2xl border border-gray-200/80 shadow-sm mb-6 flex flex-col md:flex-row items-center justify-between gap-4">
           {/* Search Box */}
           <div className="relative w-full md:w-80">
             <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
             <input
               type="text"
-              placeholder="Search products by name..."
+              placeholder="Search by title or UPC code..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setPage(1);
+              }}
               className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm font-medium text-gray-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0984e3]/30 focus:border-[#0984e3] transition-all"
             />
           </div>
 
           {/* Filter Dropdowns & Refresh */}
           <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-            {/* Status Filter */}
+            {/* Expiry Window Filter */}
             <div className="flex items-center gap-2">
               <Filter className="w-4 h-4 text-gray-400 hidden sm:inline-block" />
               <select
-                value={selectedStatus}
-                onChange={(e) => setSelectedStatus(e.target.value)}
+                value={selectedExpiryWindow}
+                onChange={(e) => {
+                  setSelectedExpiryWindow(e.target.value);
+                  setPage(1);
+                }}
                 className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#0984e3]/30 focus:border-[#0984e3]"
               >
-                <option value="ALL">All Expiry Statuses</option>
-                <option value="EXPIRING_SOON">Expiring Soon (≤ 7 days)</option>
-                <option value="EXPIRED">Expired</option>
-                <option value="FRESH">Fresh</option>
+                <option value="ALL">All Expiry Dates</option>
+                <option value="1m">Expiring within 1 Month</option>
+                <option value="3m">Expiring within 3 Months</option>
+                <option value="6m">Expiring within 6 Months</option>
               </select>
             </div>
 
@@ -284,7 +304,7 @@ const DashboardPage = () => {
             )}
 
             <button
-              onClick={fetchProducts}
+              onClick={() => fetchProducts(page)}
               className="p-2 text-gray-500 hover:text-gray-800 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
               title="Refresh Products"
             >
@@ -305,7 +325,7 @@ const DashboardPage = () => {
             <h3 className="text-base font-bold text-red-800 mb-1">Error Loading Products</h3>
             <p className="text-xs text-red-600 mb-4">{error}</p>
             <button
-              onClick={fetchProducts}
+              onClick={() => fetchProducts(page)}
               className="px-4 py-2 bg-red-600 text-white font-semibold text-xs rounded-xl hover:bg-red-700 transition-colors"
             >
               Retry
@@ -323,19 +343,19 @@ const DashboardPage = () => {
                 : "No products match your current search and filter criteria."}
             </p>
             {products.length === 0 ? (
-              <button
-                onClick={() => setIsModalOpen(true)}
+              <Link
+                to="/add-product"
                 className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#0984e3] hover:bg-[#0077d4] text-white font-bold text-sm rounded-xl shadow-lg shadow-[#0984e3]/25 transition-all"
               >
                 <Plus className="w-4 h-4" />
                 <span>Add Your First Product</span>
-              </button>
+              </Link>
             ) : (
               <button
                 onClick={() => {
                   setSearchQuery('');
+                  setSelectedExpiryWindow('ALL');
                   setSelectedCategory('ALL');
-                  setSelectedStatus('ALL');
                 }}
                 className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold text-xs rounded-xl transition-colors"
               >
@@ -344,19 +364,73 @@ const DashboardPage = () => {
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredProducts.map((prod) => (
-              <ProductCard key={prod._id} product={prod} onDelete={handleDeleteProduct} />
-            ))}
-          </div>
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              {filteredProducts.map((prod) => (
+                <ProductCard
+                  key={prod._id}
+                  product={prod}
+                  onDelete={handleDeleteProduct}
+                  onEdit={(p) => setEditingProduct(p)}
+                />
+              ))}
+            </div>
+
+            {/* Pagination Controls (Use-Case 1) */}
+            {totalPages > 1 && (
+              <div className="mt-8 flex items-center justify-between border-t border-gray-200/80 pt-6">
+                <p className="text-xs text-gray-500 font-medium">
+                  Showing page <span className="font-bold text-gray-900">{page}</span> of{' '}
+                  <span className="font-bold text-gray-900">{totalPages}</span> ({totalCount} total products)
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    disabled={page <= 1}
+                    onClick={() => {
+                      const newPage = page - 1;
+                      setPage(newPage);
+                      fetchProducts(newPage);
+                    }}
+                    className="p-2 rounded-xl border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-white transition-colors"
+                    title="Previous Page"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <span className="text-xs font-bold text-gray-700 px-3 py-1 bg-gray-100 rounded-lg">
+                    {page} / {totalPages}
+                  </span>
+                  <button
+                    disabled={page >= totalPages}
+                    onClick={() => {
+                      const newPage = page + 1;
+                      setPage(newPage);
+                      fetchProducts(newPage);
+                    }}
+                    className="p-2 rounded-xl border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-white transition-colors"
+                    title="Next Page"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </main>
 
       {/* Add Product Modal */}
       <AddProductModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
+        isOpen={isAddModalOpen}
+        onClose={() => setIsAddModalOpen(false)}
         onAddProduct={handleAddProduct}
+      />
+
+      {/* Edit Product Modal (Use-Case 3) */}
+      <EditProductModal
+        isOpen={Boolean(editingProduct)}
+        onClose={() => setEditingProduct(null)}
+        product={editingProduct}
+        onUpdateProduct={handleUpdateProduct}
       />
     </div>
   );
