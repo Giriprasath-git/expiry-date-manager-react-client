@@ -1,10 +1,12 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
+const RAW_API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001';
+const API_BASE_URL = RAW_API_BASE_URL.replace(/\/$/, '');
 
 /**
  * Utility wrapper for backend API HTTP requests
  */
 export async function apiRequest(endpoint, options = {}) {
-  const url = `${API_BASE_URL}${endpoint}`;
+  const formattedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const url = `${API_BASE_URL}${formattedEndpoint}`;
   const token = localStorage.getItem('auth_token');
   
   const headers = {
@@ -33,7 +35,7 @@ export async function apiRequest(endpoint, options = {}) {
     return data;
   } catch (error) {
     if (error.name === 'TypeError' && error.message === 'Failed to fetch') {
-      throw new Error('Unable to connect to backend server. Please make sure the backend server is running on port 5001.');
+      throw new Error('Unable to connect to the server. Please try again later.');
     }
     throw error;
   }
